@@ -1,0 +1,162 @@
+---
+title: "Practical Machine Learning Week 4"
+author: "François DELATTRE"
+date: "26 décembre 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data reading
+
+The training set is dowloaded from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+The testing set is downloaded from https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Both datasets are read using the readr package, skipping columns that are not measures. We also force some columns to be treated as double type. 
+
+```{r data_read}
+library(readr)
+train <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                  na = c('NA', '#DIV/0!', ''),  # there are different forms of NAs in the file
+                  col_types = cols(
+                    X1 = col_skip(),
+                    kurtosis_yaw_belt = col_double(),
+                    skewness_yaw_belt = col_double(),
+                    kurtosis_yaw_dumbbell = col_double(),
+                    skewness_yaw_dumbbell = col_double(),
+                    magnet_dumbbell_z = col_double(),
+                    magnet_forearm_y = col_double(),
+                    magnet_forearm_z = col_double(),
+                    cvtd_timestamp = col_skip(), 
+                    new_window = col_skip(), 
+                    num_window = col_skip(), 
+                    raw_timestamp_part_1 = col_skip(), 
+                    raw_timestamp_part_2 = col_skip(), 
+                    user_name = col_skip()))
+test  <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+                  na = c('NA', '#DIV/0!', ''),
+                  col_types = cols(
+                    X1 = col_skip(),
+                    magnet_dumbbell_z = col_double(),
+                    magnet_forearm_y = col_double(),
+                    magnet_forearm_z = col_double(),
+                    cvtd_timestamp = col_skip(), 
+                    new_window = col_skip(), 
+                    num_window = col_skip(), 
+                    raw_timestamp_part_1 = col_skip(), 
+                    raw_timestamp_part_2 = col_skip(), 
+                    user_name = col_skip()))
+```
+## Data analysis
+
+Let's perform a quick analysis especially to better understand our dataset
+
+### Missing values
+
+```{r}
+na_ratio <- apply(train, MARGIN = 2, FUN = function(col){length(which(is.na(col)))/nrow(train)})
+
+little_missing <- names(na_ratio[na_ratio > 0 & na_ratio <.3])
+lot_missing <- names(na_ratio[na_ratio > .3])
+
+```
+
+100 features have many missing values
+53 features have no missing values at all
+
+Let's remove the features that have too many missing values
+
+```{r}
+train <- train[, !colnames(train)%in%lot_missing]
+test  <- test[, !colnames(test)%in%lot_missing]
+```
+
+### Target distribution
+
+The following code produces a plot showing the row counts within each target
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+target_counts <- train %>% 
+  group_by(classe)%>%
+  tally()
+
+ggplot(target_counts)+
+  geom_col(aes(classe, n, fill= classe))
+
+```
+
+The classe variable is well balanced.
+
+## Modelling
+
+We will use the caret package to model the classe variable.
+
+### Splitting
+
+We will split our training data into a train set and a test set.
+The train set will be used to train our model.
+The test set will used to estimate the error.
+
+```{r modelling}
+library(caret)
+
+trainIndex <- createDataPartition(train$classe, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+modTrain <- train[ trainIndex,]
+modTest  <- train[-trainIndex,]
+```
+
+### Pre Processing
+We wiil now apply some pre Processing techniques to our training dataset. (center / scale / remove almost constant features)
+```{r}
+preProcValues <- preProcess(modTrain, method = c("center", "scale", "nzv"))
+
+trainTransformed <- predict(preProcValues, modTrain)
+testTransformed <- predict(preProcValues, modTest)
+```
+
+
+### Modeling
+
+We will model the classe variable using the caret package.
+A 3-fold cross validation is used to estimate the best parameters, using the Accuracy as the metric to optimise.
+
+```{r}
+fitControl <- trainControl(method = "cv",
+                           number = 3)
+
+set.seed(2802)
+xgbFit <- train(classe ~ ., data = trainTransformed, 
+                 method = "xgbTree", 
+                 trControl = fitControl,
+                 verbose=FALSE)
+xgbFit
+```
+
+### Error estimation on test set
+
+We estimate the error by predicted the classe on our test set. We then show a confusion matrix.
+
+```{r}
+test_pred <- predict(xgbFit, 
+                     newdata = testTransformed)
+
+caret::confusionMatrix(test_pred, testTransformed$classe)
+```
+
+Our results seem to be very accurate (accuracy = 99,8%)
+### Prediction
+
+```{r}
+test_preproc <- predict(preProcValues, test)
+test_submission <- predict(xgbFit, 
+                     newdata = test_preproc)
+```
+
